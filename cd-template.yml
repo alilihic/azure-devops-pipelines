@@ -1,0 +1,100 @@
+# ============================================================
+# Azure DevOps CI Pipeline Template
+# Reusable template for build, test, and security scanning
+# ============================================================
+
+parameters:
+  - name: nodeVersion
+    type: string
+    default: '18.x'
+  - name: runTests
+    type: boolean
+    default: true
+  - name: runSecurityScan
+    type: boolean
+    default: true
+
+stages:
+  - stage: CI
+    displayName: 'Build & Test'
+    jobs:
+      - job: Lint
+        displayName: 'Lint & Static Analysis'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: ${{ parameters.nodeVersion }}
+            displayName: 'Setup Node.js'
+
+          - script: npm ci
+            displayName: 'Install dependencies'
+
+          - script: npm run lint
+            displayName: 'ESLint'
+
+          - task: PowerShell@2
+            displayName: 'PSScriptAnalyzer'
+            inputs:
+              targetType: 'inline'
+              script: |
+                Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+                $results = Invoke-ScriptAnalyzer -Path ./scripts -Recurse -Severity Error
+                if ($results) {
+                  $results | Format-Table -AutoSize
+                  exit 1
+                }
+                Write-Host "PSScriptAnalyzer: No errors found" -ForegroundColor Green
+              pwsh: true
+
+      - job: Test
+        displayName: 'Unit Tests'
+        dependsOn: Lint
+        condition: and(succeeded(), eq('${{ parameters.runTests }}', true))
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: ${{ parameters.nodeVersion }}
+            displayName: 'Setup Node.js'
+
+          - script: npm ci
+            displayName: 'Install dependencies'
+
+          - script: npm test -- --coverage --reporters=jest-junit
+            displayName: 'Run tests'
+            env:
+              NODE_ENV: test
+
+          - task: PublishTestResults@2
+            displayName: 'Publish test results'
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/junit.xml'
+            condition: always()
+
+          - task: PublishCodeCoverageResults@1
+            displayName: 'Publish coverage'
+            inputs:
+              codeCoverageTool: 'Cobertura'
+              summaryFileLocation: '**/coverage/cobertura-coverage.xml'
+
+      - job: SecurityScan
+        displayName: 'Security Scanning'
+        dependsOn: Lint
+        condition: and(succeeded(), eq('${{ parameters.runSecurityScan }}', true))
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - script: |
+              curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+              trivy fs . --severity CRITICAL,HIGH --exit-code 1
+            displayName: 'Trivy filesystem scan'
+
+          - task: npm@1
+            displayName: 'npm audit'
+            inputs:
+              command: 'custom'
+              customCommand: 'audit --audit-level=high'

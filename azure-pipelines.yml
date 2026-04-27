@@ -1,0 +1,120 @@
+# ============================================================
+# Azure DevOps CD Pipeline Template
+# Reusable template for deployment to Azure App Service
+# ============================================================
+
+parameters:
+  - name: environment
+    type: string
+    values:
+      - staging
+      - production
+  - name: serviceConnection
+    type: string
+  - name: appServiceName
+    type: string
+  - name: resourceGroup
+    type: string
+  - name: containerRegistry
+    type: string
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+  - name: runSmokeTests
+    type: boolean
+    default: true
+
+stages:
+  - stage: Deploy_${{ parameters.environment }}
+    displayName: 'Deploy to ${{ parameters.environment }}'
+    jobs:
+      - deployment: Deploy
+        displayName: 'Deploy App Service'
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: ${{ parameters.environment }}
+        strategy:
+          runOnce:
+            preDeploy:
+              steps:
+                - script: echo "Pre-deploy checks for ${{ parameters.environment }}"
+                  displayName: 'Pre-deploy validation'
+
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: 'Deploy container image'
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az webapp config container set \
+                        --name ${{ parameters.appServiceName }} \
+                        --resource-group ${{ parameters.resourceGroup }} \
+                        --docker-custom-image-name ${{ parameters.containerRegistry }}/webapp:${{ parameters.imageTag }}
+
+                - task: AzureCLI@2
+                  displayName: 'Verify deployment health'
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      echo "Waiting 30s for app to stabilise..."
+                      sleep 30
+                      
+                      APP_URL=$(az webapp show \
+                        --name ${{ parameters.appServiceName }} \
+                        --resource-group ${{ parameters.resourceGroup }} \
+                        --query defaultHostName -o tsv)
+                      
+                      HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://$APP_URL/health)
+                      
+                      if [ "$HTTP_STATUS" != "200" ]; then
+                        echo "Health check failed with status: $HTTP_STATUS"
+                        exit 1
+                      fi
+                      echo "Health check passed: $HTTP_STATUS"
+
+            routeTraffic:
+              steps:
+                - script: echo "Traffic routing complete"
+
+            postRouteTraffic:
+              steps:
+                - ${{ if eq(parameters.runSmokeTests, true) }}:
+                  - task: AzureCLI@2
+                    displayName: 'Smoke tests'
+                    inputs:
+                      azureSubscription: ${{ parameters.serviceConnection }}
+                      scriptType: 'bash'
+                      scriptLocation: 'inlineScript'
+                      inlineScript: |
+                        APP_URL=$(az webapp show \
+                          --name ${{ parameters.appServiceName }} \
+                          --resource-group ${{ parameters.resourceGroup }} \
+                          --query defaultHostName -o tsv)
+                        
+                        echo "Running smoke tests against https://$APP_URL"
+                        curl -f https://$APP_URL/health || exit 1
+                        curl -f https://$APP_URL/ready || exit 1
+                        echo "All smoke tests passed"
+
+            on:
+              failure:
+                steps:
+                  - task: AzureCLI@2
+                    displayName: 'Rollback on failure'
+                    inputs:
+                      azureSubscription: ${{ parameters.serviceConnection }}
+                      scriptType: 'bash'
+                      scriptLocation: 'inlineScript'
+                      inlineScript: |
+                        echo "Deployment failed — initiating rollback"
+                        PREVIOUS_TAG=$(az webapp config container show \
+                          --name ${{ parameters.appServiceName }} \
+                          --resource-group ${{ parameters.resourceGroup }} \
+                          --query "[?name=='DOCKER_CUSTOM_IMAGE_NAME'].value" -o tsv)
+                        echo "Current image: $PREVIOUS_TAG"
+                        echo "Manual rollback required — check deployment history"

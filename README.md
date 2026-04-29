@@ -1,7 +1,8 @@
-# ============================================================
+CI/CD pipeline templates for Azure deployments with approval gates
+
 # Main Azure DevOps Pipeline
 # Orchestrates CI + CD using reusable templates
-# ============================================================
+
 
 trigger:
   branches:

@@ -26,7 +26,7 @@ variables:
   - name: imageTag
     value: $(Build.BuildId)
 
-# ── CI Stage ──────────────────────────────────────────────
+# CI Stage ──────────────────────────────────────────────
 extends:
   template: templates/ci-template.yml
   parameters:
@@ -34,7 +34,7 @@ extends:
     runTests: true
     runSecurityScan: true
 
-# ── CD: Staging ───────────────────────────────────────────
+# CD: Staging ───────────────────────────────────────────
 - ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/develop') }}:
   - template: templates/cd-template.yml
     parameters:
@@ -45,7 +45,7 @@ extends:
       containerRegistry: $(containerRegistry)
       imageTag: $(imageTag)
 
-# ── CD: Production ────────────────────────────────────────
+# CD: Production ────────────────────────────────────────
 - ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/main') }}:
   - template: templates/cd-template.yml
     parameters:
